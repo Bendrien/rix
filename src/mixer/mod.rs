@@ -1,22 +1,42 @@
-const INPUTS: usize = 3;
-const OUTPUTS: usize = 2;
-const BUFFER_SIZE: usize = 1;
+use arraydeque::ArrayDeque;
+
+pub const BUFFER_SIZE: usize = 32;
+pub const INPUTS: usize = 4;
+pub const OUTPUTS: usize = 8;
 
 type Sample = f32;
 
 #[derive(Clone, Debug)]
 pub enum Buffer {
     None,
-    Mono([Sample; BUFFER_SIZE]),
+    Mono(ArrayDeque<[Sample; BUFFER_SIZE]>),
     Stereo {
-        l: [Sample; BUFFER_SIZE],
-        r: [Sample; BUFFER_SIZE],
+        l: ArrayDeque<[Sample; BUFFER_SIZE]>,
+        r: ArrayDeque<[Sample; BUFFER_SIZE]>,
     },
 }
 
 impl Default for Buffer {
     fn default() -> Self {
-        Buffer::None
+        //Buffer::None
+        Buffer::Mono(Default::default())
+        //Buffer::Stereo{l:Default::default(),r:Default::default()}
+    }
+}
+
+impl Buffer {
+    pub fn clear(&mut self) {
+        use self::Buffer::{None, Mono, Stereo};
+
+        match self {
+            &mut None => (),
+            &mut Mono(ref mut buf) => buf.clear(),
+            &mut Stereo{ ref mut l, ref mut r } => {
+                l.clear();
+                r.clear();
+            }
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -32,7 +52,7 @@ impl Default for MixProperty {
         Self {
             gain: 1.,
             pan: 0.5,
-            mute: false,
+            mute: true,
         }
     }
 }
@@ -52,7 +72,7 @@ impl Default for Link {
     }
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Mixer {
     inputs:  [Buffer; INPUTS],
     outputs: [Buffer; OUTPUTS],
@@ -83,88 +103,88 @@ pub enum MatrixError {
     DimensionMismatch
 }
 
-fn process_matrix(matrix: &[Link], inputs: &[Buffer], outputs: &mut [Buffer]) -> Result<(), MatrixError> {
+pub fn process_matrix(matrix: &[Link], inputs: &[Buffer], outputs: &mut [Buffer]) -> Result<(), MatrixError> {
     if matrix.len() != inputs.len() * outputs.len() {
         return Err(MatrixError::DimensionMismatch);
     }
 
-    for ((links, inputs), outBuf) in matrix.chunks(inputs.len())
+    for ((links, inputs), out_buf) in matrix.chunks(inputs.len())
         .zip(inputs.chunks(inputs.len()).cycle())
         .zip(outputs.iter_mut()) {
-        for (link, inBuf) in links.iter()
+        for (link, in_buf) in links.iter()
             .zip(inputs.iter())
             .filter(|&(link, _)| link.active && !link.property.mute) {
+            use core::f32::consts::PI;
             use self::Buffer::{None, Mono, Stereo};
-            use std::f32::consts::PI;
 
-            let MixProperty { gain: gain, pan: pan, mute: mute, .. } = link.property;
-            match &outBuf {
-                &&mut None => (),
-                &&mut Mono(mut outBuf) =>
-                    match inBuf {
+            let MixProperty { gain, pan, .. } = link.property;
+            match out_buf {
+                &mut None => (),
+                &mut Mono(ref mut out_buf) =>
+                    match in_buf {
                         &None =>
-                            for out in outBuf.iter_mut() {
+                            for out in out_buf.iter_mut() {
                                 // scale the pan in to bipolar domain
                                 let scale = 2. * pan - 1.;
                                 *out += gain * scale;
                             },
-                        &Mono(inBuf) =>
-                            for (out, inM) in outBuf.iter_mut()
-                                .zip(inBuf.iter()) {
-                                *out += inM * gain;
+                        &Mono(ref in_buf) =>
+                            for (out, in_m) in out_buf.iter_mut()
+                                .zip(in_buf.iter()) {
+                                *out += in_m * gain;
                             },
-                        &Stereo { l: inBufL, r: inBufR } =>
-                            for (out, (inL, inR)) in outBuf.iter_mut()
-                                .zip(inBufL.iter()
-                                    .zip(inBufR.iter())) {
+                        &Stereo { l: ref in_buf_l, r: ref in_buf_r } =>
+                            for (out, (in_l, in_r)) in out_buf.iter_mut()
+                                .zip(in_buf_l.iter()
+                                    .zip(in_buf_r.iter())) {
                                 let rad = pan * 0.5 * PI;
-                                *out += (inL * rad.cos() + inR * rad.sin()) * gain;
+                                *out += (in_l * rad.cos() + in_r * rad.sin()) * gain;
                             },
                         _ => unimplemented!(),
                     },
-                &&mut Stereo { l: mut outBufL, r: mut outBufR } =>
-                    match inBuf {
+                &mut Stereo { l: ref mut out_buf_l, r: ref mut out_buf_r } =>
+                    match in_buf {
                         &None =>
-                            for (outL, outR) in outBufL.iter_mut()
-                                .zip(outBufR.iter_mut()) {
+                            for (out_l, out_r) in out_buf_l.iter_mut()
+                                .zip(out_buf_r.iter_mut()) {
                                 // equal power panning
                                 let rad = pan * 0.5 * PI;
                                 // scale the gain in to bipolar domain
                                 let bipolar = 2. * gain - 1.;
-                                *outL += rad.cos() * bipolar;
-                                *outR += rad.sin() * bipolar;
+                                *out_l += rad.cos() * bipolar;
+                                *out_r += rad.sin() * bipolar;
                             },
-                        &Mono(inBuf) =>
-                            for ((outL, outR), inM) in outBufL.iter_mut()
-                                .zip(outBufR.iter_mut())
-                                .zip(inBuf.iter()) {
+                        &Mono(ref in_buf) =>
+                            for ((out_l, out_r), in_m) in out_buf_l.iter_mut()
+                                .zip(out_buf_r.iter_mut())
+                                .zip(in_buf.iter()) {
                                 // equal power panning
                                 let rad = pan * 0.5 * PI;
-                                *outL += inM * rad.cos() * gain;
-                                *outR += inM * rad.sin() * gain;
+                                *out_l += in_m * rad.cos() * gain;
+                                *out_r += in_m * rad.sin() * gain;
                             },
-                        &Stereo { l: inBufL, r: inBufR } =>
-                            for ((outL, outR), (inL, inR)) in outBufL.iter_mut()
-                                .zip(outBufR.iter_mut())
-                                .zip(inBufL.iter()
-                                    .zip(inBufR.iter())) {
-                                match (pan, inL == inR) {
+                        &Stereo { l: ref in_buf_l, r: ref in_buf_r } =>
+                            for ((out_l, out_r), (in_l, in_r)) in out_buf_l.iter_mut()
+                                .zip(out_buf_r.iter_mut())
+                                .zip(in_buf_l.iter()
+                                    .zip(in_buf_r.iter())) {
+                                match (pan, in_l == in_r) {
                                     (pan, false) if pan < 0.5 => {
                                         // stereo separation
                                         let ratio = pan * PI;
-                                        *outL = (inL + inR * ratio) * gain;
-                                        *outR = (inR + inL * ratio) * gain;
+                                        *out_l = (in_l + in_r * ratio) * gain;
+                                        *out_r = (in_r + in_l * ratio) * gain;
                                     },
                                     (pan, false) if pan > 0.5 => {
                                         // merging
                                         let ratio1 = ((1.5 - pan) * 0.5 * PI).cos();
                                         let ratio2 = ((pan - 0.5) * 0.5 * PI).sin();
-                                        *outL = (inL * ratio1 + inR * ratio2) * gain;
-                                        *outR = (inR * ratio1 + inL * ratio2) * gain;
+                                        *out_l = (in_l * ratio1 + in_r * ratio2) * gain;
+                                        *out_r = (in_r * ratio1 + in_l * ratio2) * gain;
                                     },
                                     _ => {
-                                        *outL += inL * gain;
-                                        *outR += inR * gain;
+                                        *out_l += in_l * gain;
+                                        *out_r += in_r * gain;
                                     }
                                 }
                             },
@@ -186,6 +206,6 @@ mod tests {
     fn it_works() {
         let mut mxr = Mixer::new();
         mxr.process();
-        println!("{:?}", mxr);
+        println!("{:#?}", mxr);
     }
 }

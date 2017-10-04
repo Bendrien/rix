@@ -1,0 +1,16 @@
+[package]
+name = "rix"
+version = "0.1.0"
+authors = ["Anyere Bendrien <anyere.bendrien@posteo.de>"]
+
+[dependencies]
+sample = { version = "0.7.0", default-features = false }
+arraydeque = { version = "0.2", default-features = false }
+vst2 = "0.0.1"
+
+[dev-dependencies]
+cpal = "0.4.5"
+futures = "0.1.1"
+
+[lib]
+crate-type = ["dylib"]
